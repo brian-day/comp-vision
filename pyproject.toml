@@ -10,6 +10,7 @@ dependencies = [
     "mlxtend>=0.24.0",
     "numpy>=2.4.5",
     "opencv-python>=4.13.0.92",
+    "pycocotools>=2.0.11",
     "requests>=2.34.2",
     "ruff>=0.15.14",
     "tensorflow>=2.21.0",

@@ -83,6 +83,11 @@ def set_dtype_and_device(
     return x_train, x_test, y_train, y_test
 
 
+# TODO: Offload optimizer construction.
+# Refactor for flexibility with classification vs object detection (or write separate func).
+# Add learning rate schedulers.
+# Split testing / validation from training.
+# Seaparate Dataloader from Training.
 def train_model(
     model: nn.Module,
     train_dataset: Any,
@@ -97,7 +102,7 @@ def train_model(
     stats_fxn: Optional[StatsFunc] = None,
     print_test: bool = False,
     test_dataset: Optional[Any] = None,
-    device: Optional[torch.device] = None,
+    device: Optional[str | torch.device] = None,
 ) -> Tuple[List[float], List[StatsDict]]:
     """Functional approach for training a pytorch model. Model parameters are updated in place.
     Currently expects that all inputs are already on the appropriate device.
