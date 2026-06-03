@@ -10,7 +10,6 @@ wheels/
 .venv
 
 # Ignore Datasets, Models, and training files (for now)
-datasets/
 models/
 log*.txt
 
