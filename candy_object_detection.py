@@ -7,12 +7,14 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, NotRequired, Tuple, Optional, Union, TypedDict
 from PIL import Image
+from matplotlib import cm
 import matplotlib.pyplot as plt
+import numpy as np
 
 import torch
 import torchvision
 from torchvision.models.detection import FasterRCNN
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, ResNet50_Weights
 from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.io import read_image
 from torchvision import tv_tensors
@@ -20,6 +22,13 @@ from torchvision.transforms import v2 as T
 from torchvision.transforms.v2 import functional as F
 from torchvision.utils import draw_bounding_boxes
 import torch.nn.functional as nnF
+
+
+# DATASET_PATH = "datasets/candy_data_14DEC24/"
+DATASET_PATH = "datasets/coin_data_12DEC30/"
+IMG_FILE_EXT = ".JPG"
+MODEL_FILE = "models/fintuned_coin_model.pth"
+# DATASET_PATH = "datasets/wellplate_data/"
 
 
 # Add addtioanl type which ahndles transofrms of iamges with bounding boxes.
@@ -110,14 +119,19 @@ class BoundingBoxDataset(torch.utils.data.Dataset):
     classes: List[str]  # List of all classes, excluding background
     num_classes: int  # Number of classes, including background, which is necessary for the model
 
-    def __init__(self, root: Path | str, transforms: Optional[BoxedImageTransform]):
+    def __init__(self, root: Path | str, transforms: Optional[BoxedImageTransform], img_extension: str = IMG_FILE_EXT):
         if isinstance(root, str):
             root = Path(root)
         self.root = root
         # Use minimimal set of transforms if None provided for type safety.
         self.transforms = transforms if transforms else generate_transform()
-        self.img_files = sorted((self.root / "images").glob("*.jpg"))
+        self.img_files = sorted((self.root / "images").glob(f"*{img_extension}"))
         self.box_files = sorted((self.root / "labels").glob("*.txt"))
+
+        # Limit to 8 images and train to check configuration...
+        # self.img_files = self.img_files[0:64]
+        # self.box_files = self.box_files[0:64]
+
         # TODO: Add check that all images contain a corresponding box file.
         self.classes = read_classes_file(self.root / "classes.txt")
         self.num_classes = len(self.classes) + 1  # Add 1 for background class.
@@ -127,6 +141,10 @@ class BoundingBoxDataset(torch.utils.data.Dataset):
         box_path = self.box_files[idx]
         img = read_image(str(img_path))  # later versions of torchvision accept Paths directly
         img = tv_tensors.Image(img)
+
+        # Remove alpha channel if present. TODO: Handle this more elegantly...
+        if img.shape[0] == 4:
+            img = tv_tensors.Image(img[:3, :, :])
         labels, boxes = read_box_file(box_path)
 
         # NOTE: We expect unnormalized bounding boxes, so apply that transform here.
@@ -138,6 +156,7 @@ class BoundingBoxDataset(torch.utils.data.Dataset):
         boxes = tv_tensors.BoundingBoxes(boxes, format="CXCYWH", canvas_size=F.get_size(img))  # type: ignore
         converter = T.ConvertBoundingBoxFormat("XYXY")
         boxes = converter(boxes)
+        # boxes = tv_tensors.BoundingBoxes(boxes, format="XYXY", canvas_size=F.get_size(img))  # type: ignore
 
         target_dict: TargetDict = {"image_id": idx, "labels": labels, "boxes": boxes}
 
@@ -153,6 +172,12 @@ class BoundingBoxDataset(torch.utils.data.Dataset):
         box_path = self.box_files[idx]
         img = read_image(str(img_path))  # later versions of torchvision accept Paths directly
         img = tv_tensors.Image(img)
+
+        # Remove alpha channel if present. TODO: Handle this more elegantly...
+        if img.shape[0] == 4:
+            img = tv_tensors.Image(img[:3, :, :])
+        labels, boxes = read_box_file(box_path)
+
         labels, boxes = read_box_file(box_path)
 
         # NOTE: We expect unnormalized bounding boxes, so apply that transform here.
@@ -206,8 +231,9 @@ def read_classes_file(file: Path) -> List[str]:
 # TODO: Research better set of image transforms for training.
 def generate_transform(train: bool = False) -> BoxedImageTransform:
     transforms = []
-    transforms.append(RecordOriginalImageSize())
-    transforms.append(T.Resize(size=(640, 640)))
+    # ResNet50 Model has rescaling baked in... Allow it to handle this...
+    # transforms.append(RecordOriginalImageSize())
+    # transforms.append(T.Resize(size=(640, 640)))
     if train:
         transforms.append(T.RandomHorizontalFlip(1.0))
         transforms.append(T.RandomVerticalFlip(0.1))
@@ -227,63 +253,69 @@ def generate_class_balanced_weights(dataset: BoundingBoxDataset):
     # To account for class imbalance in the training data, we can modify the loss function of the
     # model to more harshly penalize rare classes. This prevents the model from over prediciting the
     # common class, which is would otherwise learn to do during training.
-    # Note: Classes assumed 0 = background, so must include a 0 weight item at the beginning of the
-    # list (I think...? Check this...)
-
+    # Note: Classes assumed to have index 0 = background, so must include a small non-zero weight
+    # for the background at the beginning of the weight tensor.
     class_count = {i: 0 for i in range(dataset.num_classes)}
     for _, target in dataset:
         for label in target["labels"]:
             class_count[label.item()] += 1  #type: ignore - labels is an integer tensor
     total = sum(class_count.values())
 
-    # inverse weights so that misclassify more common objects are less penalized.
-    # this effect is offset by frequent appearences.
-    return torch.Tensor([total/v if v != 0 else 0 for v in list(class_count.values())])
+    # Inverse weights so that misclassifying more common objects are less penalized.
+    # This effect is offset by frequent appearences.
+    weights = [total/(v*dataset.num_classes) if v != 0 else 0 for v in list(class_count.values())]
+    weights[0] = 0.1  # Manually set the background weight.
+    weights_tensor = torch.tensor(weights, dtype=torch.float32)
+
+    return weights_tensor
 
 
-# Create a custom box predictor (inheriting from the standard torchvision FastRCNNPredictor)
-class WeightedFastRCNNPredictor(FastRCNNPredictor):
-    def __init__(self, in_channels, num_classes, weights):
-        super(WeightedFastRCNNPredictor, self).__init__(in_channels, num_classes)
-        # Replace the default CrossEntropyLoss with a weighted one
-        self.cls_loss_func = torch.nn.CrossEntropyLoss(weight=weights)
-
-    def forward(self, x):
-        if x.dim() == 4:
-            x = torch.flatten(x, 1)
-        cls_score = self.cls_score(x)
-        bbox_pred = self.bbox_pred(x)
-        return cls_score, bbox_pred
-
-
+# weights and weights backbone not the same...
 def get_resnet50_model(dataset):
-    # Load an instance segmentation model pre-trained on COCO
-    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT")
+    # -----------
+    # from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
+
+    # # 1. Load a ResNet-101 FPN backbone pre-trained on ImageNet
+    # backbone = resnet_fpn_backbone('resnet101', weights='DEFAULT', pretrained=True)
+    
+    # # 2. Construct the Faster R-CNN model using the custom backbone
+    # model = FasterRCNN(backbone=backbone, num_classes=dataset.num_classes)
+
+    # -----------
+    # 1. Load the backbone with state-of-the-art weights
+    weights = torchvision.models.detection.FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT
+    model = torchvision.models.detection.fasterrcnn_resnet50_fpn_v2(
+        weights=weights,
+        min_size=600,
+        max_size=1000
+    )
 
     # Get number of input features for the classifier
     in_features = model.roi_heads.box_predictor.cls_score.in_features  # type: ignore
 
     # (Option 1, Non Weighted) Replace the pre-trained head with a new one
-    # model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, dataset.num_classes)
 
+    # -----------
     # (Option 1, Weighted) Replace the box_predictor with your weighted version
-    class_weights = generate_class_balanced_weights(dataset)
-    model.roi_heads.box_predictor = WeightedFastRCNNPredictor(
-        in_features, 
-        dataset.num_classes, 
-        weights=class_weights
-    )
+    # class_weights = generate_class_balanced_weights(dataset)
+    # model.roi_heads.box_predictor = WeightedFastRCNNPredictor(
+    #     in_features, 
+    #     dataset.num_classes, 
+    #     weights=class_weights
+    # )
 
     return model
 
 
 def collate_fn(batch):
+    # Used to avoid shape issues.
     return tuple(zip(*batch))
 
 
 def _test_forward_method():
     model = get_resnet50_model(12)
-    dataset = BoundingBoxDataset("datasets/candy_data_14DEC24/", generate_transform(train=True))
+    dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True))
     data_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=2,
@@ -315,7 +347,7 @@ def _test_forward_method():
 def plot_training_data(idx):
     # NOTE: This includes applies transforms to both iamge and bounding boxes.
     # NOTE: Candy Dataset appears to include to boxes which need to be rotated relative to raw image.
-    candy_data = BoundingBoxDataset("datasets/candy_data_14DEC24/", generate_transform(train=True))
+    candy_data = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True))
     image, target_dict = candy_data[idx]
 
     # NOTE: draw_bounding_boxes explicitly expect that boxes use XYXY format.
@@ -345,7 +377,6 @@ def train_one_epoch(model, optimizer, data_loader, device):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
 
-
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
 
@@ -356,22 +387,22 @@ def train_one_epoch(model, optimizer, data_loader, device):
         print(f"Batch #{batch} Loss: {losses}")
 
 
-# Unused, Incomplete
-def train_model(epochs: int = 30, state_dict_file: Optional[Path] = None):
+def train_model(epochs: int = 5, state_dict_file: Optional[Path] = None):
     device = "cpu"
     print(f"Evaluating on {device}")
 
     # Create dataset and dataloader
     # TODO: Add training / test / validation split
-    dataset = BoundingBoxDataset("datasets/candy_data_14DEC24/", generate_transform(train=True))
+    dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True))
     data_loader = torch.utils.data.DataLoader(
         dataset,
-        batch_size=32,
+        batch_size=4,
         shuffle=True,
         collate_fn=collate_fn
     )
 
     # Create model and set device
+    # weights = ResNet50_Weights.IMAGENET1K_V2
     model = get_resnet50_model(dataset)
     if state_dict_file:
         state_dict = torch.load(state_dict_file, weights_only=True)
@@ -396,17 +427,13 @@ def train_model(epochs: int = 30, state_dict_file: Optional[Path] = None):
         gamma=0.1
     )
 
-    class_weights = generate_class_balanced_weights(dataset)
-
     for epoch in range(epochs):
         print(f"----- Epoch #{epoch} -----")
-        # Train for one epoch, printing every 10 iterations
-        # train_one_epoch(model, optimizer, data_loader, device)
         train_one_epoch(model, optimizer, data_loader, device)
         # Update the learning rate
         lr_scheduler.step()
 
-    torch.save(model.state_dict(), 'finetuned_candy_model.pth')
+    torch.save(model.state_dict(), MODEL_FILE)
 
 
 def apply_nms(boxes, scores, labels, *, iou_thresh=0.5, score_thresh=0.05, max_detections=100,
@@ -452,11 +479,65 @@ def apply_nms(boxes, scores, labels, *, iou_thresh=0.5, score_thresh=0.05, max_d
     return boxes[keep], scores[keep], labels[keep]
 
 
-def single_image_classify(idx, plot_transformed=False):
-    dataset = BoundingBoxDataset("datasets/candy_data_14DEC24/", generate_transform())
+def get_luminance(color_tuple):
+    """Calculates relative luminance for an RGB tuple (R, G, B) with values 0-255."""
+    r, g, b = [c / 255.0 for c in color_tuple]
+    
+    # Apply gamma correction
+    r = r / 12.92 if r <= 0.03928 else ((r + 0.055) / 1.055) ** 2.4
+    g = g / 12.92 if g <= 0.03928 else ((g + 0.055) / 1.055) ** 2.4
+    b = b / 12.92 if b <= 0.03928 else ((b + 0.055) / 1.055) ** 2.4
+    
+    return 0.2126 * r + 0.0722 * g + 0.0722 * b # Wait, let's look at the correct formula below
 
-    model = get_resnet50_model(dataset.num_classes)
-    state_dict = torch.load("finetuned_candy_model.pth", weights_only=True)
+
+def get_contrast_ratio(color1, color2):
+    """Calculates the contrast ratio between two RGB tuples."""
+    lum1 = get_luminance(color1)
+    lum2 = get_luminance(color2)
+    
+    # Ensure L1 is the lighter color and L2 is the darker color
+    lighter = max(lum1, lum2)
+    darker = min(lum1, lum2)
+    
+    return (lighter + 0.055) / (darker + 0.055)
+
+
+def generate_label_colormap(dataset):
+    colors = cm.get_cmap('turbo', 12)
+    colors = colors(np.linspace(0,1,dataset.num_classes-1))
+    # Draw bounding boxes expects tuple of three ints, ranging from 0 to 255.
+    colors = np.round(colors * 255)
+    colors = [tuple(int(v) for v in color[0:3]) for color in colors]
+    colors_dict = {label: colors[i] for (i, label) in enumerate(dataset.classes)}
+
+    return colors_dict
+
+
+def generate_label_text_colormap(label_color_map):
+    white = (255, 255, 255)
+    black = (0, 0, 0)
+
+    label_text_color = {}
+    for label, color in label_color_map.items():
+        # lighter color must go first, hence the ordering of inputs
+        white_contrast = get_contrast_ratio(white, color)
+        black_contrast = get_contrast_ratio(color, black)
+
+        if black_contrast > white_contrast:
+            label_text_color[label] = "black"
+        else:
+            label_text_color[label] = "white"
+
+    return label_text_color
+
+
+def single_image_classify(idx, plot_transformed=False):
+    dataset = BoundingBoxDataset(DATASET_PATH, generate_transform())
+
+    # weights = ResNet50_Weights.IMAGENET1K_V2
+    model = get_resnet50_model(dataset)
+    state_dict = torch.load("models/finetuned_wellplate_model.pth", weights_only=True)
     model.load_state_dict(state_dict)
     model.eval()  # Redundant to with torch.no_grad()?
 
@@ -473,11 +554,11 @@ def single_image_classify(idx, plot_transformed=False):
     boxes = target_pred['boxes']   # (M,4)
     scores = target_pred['scores']
     labels = target_pred['labels']
-    score_thresh = scores[10]
+    score_thresh = 0.35  # 0.3-0.5 recommended
+    # NOTE: Overlap filter only applies to bounding boxes of the same class unless batched=False
     boxes, scores, labels = apply_nms(boxes, scores, labels, iou_thresh=0.5, score_thresh=score_thresh)
     boxes, scores, labels = apply_nms(boxes, scores, labels, iou_thresh=0.5, score_thresh=score_thresh,
                                       batched=False)
-    # NOTE: OVerlap filter only applies to bounding boxes of the same class!
 
     if not plot_transformed:
         img_raw, _ = dataset.get_non_transformed_item(idx)
@@ -486,14 +567,20 @@ def single_image_classify(idx, plot_transformed=False):
         img = img_raw
         boxes = boxes_rescaled
 
+    label_cmap = generate_label_colormap(dataset)
+    label_text_cmap = generate_label_text_colormap(label_cmap)
+
+    output_image = img
     # class_names_true = [dataset.classes[i-1] for i in target_true["labels"]]
-    output_image = draw_bounding_boxes(
-        img, target_true["boxes"],
-        colors="blue", width=1, font="Arial", font_size=12)
+    # output_image = draw_bounding_boxes(
+    #     img, target_true["boxes"],
+    #     colors="blue", width=1, font="Arial", font_size=12)
     class_names_pred = [dataset.classes[i-1] for i in labels]
+    class_names_w_score = [f"{class_pred}: {score:.3f}" for (class_pred, score) in zip(class_names_pred, scores)]
     output_image = draw_bounding_boxes(
-        output_image, boxes, class_names_pred, 
-        colors="red", width=1, font="Arial", font_size=12)
+        output_image, boxes, labels=class_names_w_score, 
+        colors=[label_cmap[label] for label in class_names_pred], width=3, font="Arial", font_size=20,
+        fill_labels=True, label_colors=[label_text_cmap[label] for label in class_names_pred])
 
     plt.figure(figsize=(12, 12))
     plt.imshow(output_image.permute(1, 2, 0))
@@ -514,17 +601,17 @@ def rename_images_and_labels(root):
 
 
 def main():
-    candy_data = BoundingBoxDataset("datasets/candy_data_14DEC24/", generate_transform(train=True))
-    dataset = BoundingBoxDataset("datasets/candy_data_14DEC24/", generate_transform(train=True))
+    candy_data = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True))
+    dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True))
 
 
 if __name__ == "__main__":
     # main()
     # _test_forward_method()
-    # rename_images_and_labels("datasets/candy_data_14DEC24/")
+    # rename_images_and_labels(DATASET_PATH)
     # for i in range(0, 500):
     #     plot_training_data(i)
     train_model()
-    # train_model(state_dict_file=Path("finetuned_candy_model.pth"))
-    # for i in range(0,1):
-    #     single_image_classify(i)
+    # train_model(state_dict_file=Path(MODEL_FILE))
+    for i in range(0,8):
+        single_image_classify(i)
