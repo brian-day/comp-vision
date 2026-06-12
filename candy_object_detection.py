@@ -24,12 +24,17 @@ from torchvision.utils import draw_bounding_boxes
 import torch.nn.functional as nnF
 
 
-# DATASET_PATH = "datasets/candy_data_14DEC24/"
-DATASET_PATH = "datasets/coin_data_12DEC30/"
-IMG_FILE_EXT = ".JPG"
-MODEL_FILE = "models/fintuned_coin_model.pth"
-# DATASET_PATH = "datasets/wellplate_data/"
+DATASET_PATH = "datasets/candy_data_14DEC24/"
+IMG_FILE_EXT = ".jpg"
+MODEL_FILE = "models/finetuned_candy_model.pth"
 
+# DATASET_PATH = "datasets/coin_data_12DEC30/"
+# IMG_FILE_EXT = ".JPG"
+# MODEL_FILE = "models/finetuned_coin_model.pth"
+
+# DATASET_PATH = "datasets/wellplate_data/"
+# IMG_FILE_EXT = ".png"
+# MODEL_FILE = "models/finetuned_wellplate_model.pth"
 
 # Add addtioanl type which ahndles transofrms of iamges with bounding boxes.
 type ImageTransform = Callable[[Image.Image], torch.Tensor]
@@ -436,6 +441,36 @@ def train_model(epochs: int = 5, state_dict_file: Optional[Path] = None):
     torch.save(model.state_dict(), MODEL_FILE)
 
 
+def validate_model(device="cpu"):
+    dataset = BoundingBoxDataset(DATASET_PATH, generate_transform())
+    data_loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=4,
+        shuffle=True,
+        collate_fn=collate_fn
+    )
+
+    model = get_resnet50_model(dataset)
+    state_dict = torch.load(MODEL_FILE, weights_only=True)
+    model.load_state_dict(state_dict)
+    model.eval()  # Redundant to with torch.no_grad()?
+
+    from torchmetrics.detection import MeanAveragePrecision
+    metric = MeanAveragePrecision()
+    for batch, (images, targets) in enumerate(data_loader):
+        images = list(image.to(device) for image in images)
+        target = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
+
+        preds = model(images)
+
+        metric.update(preds, target)
+    
+    results = metric.compute()
+
+    print("Overall mAP:", results["map"])
+    print("mAP at 0.50 IoU:", results["map_50"])
+
+
 def apply_nms(boxes, scores, labels, *, iou_thresh=0.5, score_thresh=0.05, max_detections=100,
               batched=True):
     """Applies Non-Maximal Supression (NMS) to the detected bounding boxes for a given image.
@@ -532,6 +567,7 @@ def generate_label_text_colormap(label_color_map):
     return label_text_color
 
 
+# TODO: Factor out plotting portion of code...
 def single_image_classify(idx, plot_transformed=False):
     dataset = BoundingBoxDataset(DATASET_PATH, generate_transform())
 
@@ -600,6 +636,102 @@ def rename_images_and_labels(root):
         os.rename(label, str(new_label_name))
 
 
+# TODO: Implement IoU with handling for closest guess (Hungarian Algorithm?)
+# Implement mAP, precision, recall, F1 score
+# Hungarian Algorithm asses the overlap of all predicted boxes with true boxes and class labels 
+# to assign map predections with truth and assess False Positives and False Negatives.
+
+import torch
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+import torchvision.ops as ops
+from torchmetrics.classification import MulticlassAveragePrecision
+# https://blog.roboflow.com/object-detection-metrics/
+# https://lightning.ai/docs/torchmetrics/stable/detection/mean_average_precision.html
+
+
+def match_boxes(gt_boxes, pred_boxes, iou_threshold=0.5):
+    """
+    Matches GT and Pred boxes under missing/extra constraints using the Hungarian Algorithm.
+    """
+    if len(gt_boxes) == 0 or len(pred_boxes) == 0:
+        return [], list(range(len(gt_boxes))), list(range(len(pred_boxes)))
+
+    # Step 1: Calculate the N x M IoU Matrix
+    iou_matrix = ops.box_iou(gt_boxes, pred_boxes).numpy()
+    
+    # Step 2: Convert to cost matrix for minimization (1 - IoU)
+    cost_matrix = 1.0 - iou_matrix
+    
+    # Step 3: Find optimal 1-to-1 matching indices
+    gt_indices, pred_indices = linear_sum_assignment(cost_matrix)
+    
+    matched_pairs = []
+    unmatched_gt = set(range(len(gt_boxes)))
+    unmatched_pred = set(range(len(pred_boxes)))
+    
+    # Step 4: Filter assignments by IoU threshold
+    for gt_idx, pred_idx in zip(gt_indices, pred_indices):
+        iou = iou_matrix[gt_idx, pred_idx]
+        if iou >= iou_threshold:
+            matched_pairs.append({'gt_idx': gt_idx, 'pred_idx': pred_idx, 'iou': iou})
+            unmatched_gt.remove(gt_idx)
+            unmatched_pred.remove(pred_idx)
+            
+    return matched_pairs, list(unmatched_gt), list(unmatched_pred)
+
+
+def hung_alg_test():
+    # --- EXAMPLE USAGE ---
+    # 3 Ground Truth Boxes
+    gt = torch.tensor([
+        [10, 10, 50, 50],
+        [60, 60, 100, 100],
+        [120, 120, 150, 150]  # This one will be MISSING (no match)
+    ], dtype=torch.float32)
+
+    # 4 Predicted Boxes (1 extra/false positive)
+    pred = torch.tensor([
+        [12, 12, 48, 48],    # Matches GT 0
+        [58, 62, 102, 98],   # Matches GT 1
+        [200, 200, 250, 250], # EXTRA box (No GT close by)
+        [11, 11, 49, 49]     # EXTRA prediction overlapping GT 0 (Filtered out by Hungarian)
+    ], dtype=torch.float32)
+
+
+    matches, missing_gt, extra_pred = match_boxes(gt, pred, iou_threshold=0.5)
+
+    print("✅ MATCHED PAIRS:")
+    for m in matches:
+        print(f"   GT Box {m['gt_idx']} <--> Pred Box {m['pred_idx']} (IoU: {m['iou']:.2f})")
+
+    print(f"\n❌ MISSING BOXES (False Negatives): {missing_gt}")
+    print(f"⚠️ EXTRA BOXES (False Positives): {extra_pred}")
+
+
+# TODO: Figure out how to handle the weighting. Per image? Per object? 
+# I *think* per object, so batch images and flatten results.
+# Yes, this is based on object occurence. Individual images needed for separatring true postitives
+# from false positives / negatives.
+# TODO: This should also be calcualted per class and overall.
+def calculate_precision(true_pos, false_pos):
+    return true_pos / (true_pos +  false_pos) 
+
+
+def calculate_recall(true_pos, false_neg):
+    return true_pos / (true_pos +  false_neg) 
+
+
+def calculate_mean_average_precision():
+    # Use torchmetrics.detection implementation
+    pass
+
+
+def calculate_f1_score(precision, recall):
+    return 2*(precision*recall)/(precision+recall)
+
+
+
 def main():
     candy_data = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True))
     dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True))
@@ -611,7 +743,12 @@ if __name__ == "__main__":
     # rename_images_and_labels(DATASET_PATH)
     # for i in range(0, 500):
     #     plot_training_data(i)
-    train_model()
+    # train_model()
     # train_model(state_dict_file=Path(MODEL_FILE))
-    for i in range(0,8):
-        single_image_classify(i)
+    # for i in range(0,8):
+    #     single_image_classify(i)
+
+    # stats_tests()
+    # hung_alg_test()
+    # stats_test2()
+    validate_model()
