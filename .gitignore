@@ -9,10 +9,6 @@ wheels/
 # Virtual environments
 .venv
 
-# Ignore Datasets, Models, and training files (for now)
-models/
-log*.txt
-
 # IDE
 .vscode
 
