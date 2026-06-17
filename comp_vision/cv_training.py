@@ -3,13 +3,9 @@ Loosely based on the tutorial for the PennFudan dataset (tv_object_detection.py)
 segmentation masks or superfluous modules. Data is in YOLO format.
 """
 
-import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, NotRequired, Tuple, Optional, Union, TypedDict
-from PIL import Image
-from matplotlib import cm
+from typing import List, Tuple, Optional
 import matplotlib.pyplot as plt
-import numpy as np
 
 import torch
 import torchvision
@@ -24,7 +20,6 @@ from torchmetrics.detection import MeanAveragePrecision
 from comp_vision.cv_typing import (
     TargetDict,
     TargetDictPureTensor,
-    ImageTransform,
     BoxedImageTransform,
 )
 

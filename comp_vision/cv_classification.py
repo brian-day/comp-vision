@@ -7,7 +7,6 @@ from torchvision.utils import draw_bounding_boxes
 import matplotlib.pyplot as plt
 
 from comp_vision.cv_training import (
-    BoundingBoxDataset,
     get_resnet50_model,
     apply_nms,
     recover_original_image_dimensions,
@@ -52,11 +51,11 @@ def single_image_classify(
     if not plot_transformed:
         img_raw, _ = dataset.get_non_transformed_item(idx)
         boxes_rescaled = recover_original_image_dimensions(
-            boxes, F.get_size(img), F.get_size(img_raw)
-        )  # type: ignore - list[int] vs tuple(int, int)
+            boxes, F.get_size(img), F.get_size(img_raw)  # type: ignore
+        )
         target_true["boxes"] = recover_original_image_dimensions(
-            target_true["boxes"], F.get_size(img), F.get_size(img_raw)
-        )  # type: ignore - list[int] vs tuple(int, int)
+            target_true["boxes"], F.get_size(img), F.get_size(img_raw)  # type: ignore
+        )
         img = img_raw
         boxes = boxes_rescaled
 

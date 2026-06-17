@@ -9,8 +9,7 @@ for the inputs / outputs of our own defined functions, not return type of torch 
 import jaxtyping as jt
 import torch
 from beartype import beartype
-from pathlib import Path
-from typing import Any, Callable, Dict, List, NotRequired, Tuple, Optional, Union, TypedDict
+from typing import Callable, NotRequired, Tuple, TypedDict
 from PIL import Image
 from torchvision import tv_tensors
 

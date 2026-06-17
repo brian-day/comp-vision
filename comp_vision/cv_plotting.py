@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple
 from torchvision.transforms import v2 as T
 from torchvision.utils import draw_bounding_boxes
 
-from comp_vision.cv_training import BoundingBoxDataset, generate_transform
+from comp_vision.cv_training import BoundingBoxDataset
 
 
 type LabelColorMap = Dict[str, Tuple[int, int, int]]

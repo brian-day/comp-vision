@@ -1,11 +1,7 @@
 import os
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Any, Callable, Dict, List, NotRequired, Tuple, Optional, Union, TypedDict
-from PIL import Image
-from torchvision import tv_tensors
 from torchvision.transforms import v2 as T
-from torchvision.utils import draw_bounding_boxes
 
 from comp_vision.cv_training import BoundingBoxDataset, generate_transform
 
