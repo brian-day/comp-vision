@@ -16,33 +16,35 @@ type LabelTextColorMap = Dict[str, str]
 def get_luminance(color_tuple) -> float:
     """Calculates relative luminance for an RGB tuple (R, G, B) with values 0-255."""
     r, g, b = [c / 255.0 for c in color_tuple]
-    
+
     # Apply gamma correction
     r = r / 12.92 if r <= 0.03928 else ((r + 0.055) / 1.055) ** 2.4
     g = g / 12.92 if g <= 0.03928 else ((g + 0.055) / 1.055) ** 2.4
     b = b / 12.92 if b <= 0.03928 else ((b + 0.055) / 1.055) ** 2.4
-    
-    return 0.2126 * r + 0.0722 * g + 0.0722 * b # Wait, let's look at the correct formula below
+
+    return 0.2126 * r + 0.0722 * g + 0.0722 * b  # Wait, let's look at the correct formula below
 
 
 def get_contrast_ratio(color1, color2) -> float:
     """Calculates the contrast ratio between two RGB tuples."""
     lum1 = get_luminance(color1)
     lum2 = get_luminance(color2)
-    
+
     # Ensure L1 is the lighter color and L2 is the darker color
     lighter = max(lum1, lum2)
     darker = min(lum1, lum2)
-    
+
     return (lighter + 0.055) / (darker + 0.055)
 
 
 def generate_label_colormap(dataset: BoundingBoxDataset) -> LabelColorMap:
-    colors = cm.get_cmap('turbo', dataset.num_classes)
-    colors = colors(np.linspace(0,1,dataset.num_classes-1))
+    colors = cm.get_cmap("turbo", dataset.num_classes)
+    colors = colors(np.linspace(0, 1, dataset.num_classes - 1))
     # Draw bounding boxes expects tuple of three ints, ranging from 0 to 255.
     colors = np.round(colors * 255)
-    colors_tuple: list[Tuple[int, int, int]] = [tuple(int(v) for v in color[0:3]) for color in colors]  #type: ignore
+    colors_tuple: list[Tuple[int, int, int]] = [
+        tuple(int(v) for v in color[0:3]) for color in colors
+    ]  # type: ignore
     colors_dict = {label: colors_tuple[i] for (i, label) in enumerate(dataset.classes)}
 
     return colors_dict
@@ -66,8 +68,12 @@ def generate_label_text_colormap(label_color_map: LabelColorMap) -> LabelTextCol
     return label_text_color
 
 
-def plot_training_data(dataset: BoundingBoxDataset, idx: int, image_out: Optional[str|Path] = None,
-                       interactive: bool = False):
+def plot_training_data(
+    dataset: BoundingBoxDataset,
+    idx: int,
+    image_out: Optional[str | Path] = None,
+    interactive: bool = False,
+):
     # NOTE: This includes applies transforms to both iamge and bounding boxes.
     image, target_dict = dataset[idx]
 
@@ -83,13 +89,18 @@ def plot_training_data(dataset: BoundingBoxDataset, idx: int, image_out: Optiona
     label_cmap = generate_label_colormap(dataset)
     label_text_cmap = generate_label_text_colormap(label_cmap)
 
-    class_names_true = [dataset.classes[i-1] for i in target_dict["labels"]]
+    class_names_true = [dataset.classes[i - 1] for i in target_dict["labels"]]
     output_image = draw_bounding_boxes(
-        image, target_dict["boxes"], labels=class_names_true,
+        image,
+        target_dict["boxes"],
+        labels=class_names_true,
         colors=[label_cmap[label] for label in class_names_true],
         label_colors=[label_text_cmap[label] for label in class_names_true],
-        width=3, font="Arial", font_size=20,
-        fill_labels=True)
+        width=3,
+        font="Arial",
+        font_size=20,
+        fill_labels=True,
+    )
 
     plt.figure(figsize=(8, 8))
     plt.imshow(output_image.permute(1, 2, 0))

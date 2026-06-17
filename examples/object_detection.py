@@ -12,6 +12,10 @@ And correspinding google colab notebook:
 Downloading the candy and coin datasets:
     !wget -O /content/data.zip https://s3.us-west-1.amazonaws.com/evanjuras.com/resources/candy_data_06JAN25.zip # Candy dataset
     !wget -O /content/data.zip https://s3.us-west-1.amazonaws.com/evanjuras.com/resources/YOLO_coin_data_12DEC30.zip # Coin dataset
+
+All three example datasets contain pre-finetuned models in the models directory. If you do not wish
+to train models yourself, these exisiting models shoudl yield good performance for testing other
+parts of the module.
 """
 
 DATASET_PATH = "datasets/candy_data/"
@@ -28,7 +32,9 @@ MODEL_FILE = "models/finetuned_candy_model.pth"
 
 
 def main():
-    dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True), img_extension=IMG_FILE_EXT)
+    dataset = BoundingBoxDataset(
+        DATASET_PATH, generate_transform(train=True), img_extension=IMG_FILE_EXT
+    )
 
     # Display some training images
     for i in range(0, 5):
@@ -39,7 +45,7 @@ def main():
 
     # Classify some images with the model
     dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(), img_extension=IMG_FILE_EXT)
-    for i in range(0,5):
+    for i in range(0, 5):
         single_image_classify(dataset, MODEL_FILE, i)
 
 

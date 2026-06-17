@@ -1,4 +1,3 @@
-
 """
 See for jax typing options: https://docs.kidger.site/jaxtyping/api/array/
 
@@ -16,7 +15,7 @@ from PIL import Image
 from torchvision import tv_tensors
 
 
-# NOTE: Tried (unsuccessfully) rewriting these with typing's NewType to yield stricter annotations. 
+# NOTE: Tried (unsuccessfully) rewriting these with typing's NewType to yield stricter annotations.
 # Pylance will treat all of these types as simply torch.Tensor.
 type float32Tensor = jt.Float32[torch.Tensor, "..."]
 type float64Tensor = jt.Float64[torch.Tensor, "..."]
@@ -51,9 +50,9 @@ type BoxedImageTransform = Callable[
 # both treated as just torch.Tensor
 @jt.jaxtyped(typechecker=beartype)
 def typing_test() -> int64Tensor:
-    t1: float32Tensor = torch.tensor([1,2,3], dtype=torch.float32)
-    t2: float64Tensor = torch.tensor([1,2,3], dtype=torch.float64)
-    t3: int64Tensor = torch.tensor([1,2,3], dtype=torch.int64)
+    t1: float32Tensor = torch.tensor([1, 2, 3], dtype=torch.float32)
+    t2: float64Tensor = torch.tensor([1, 2, 3], dtype=torch.float64)
+    t3: int64Tensor = torch.tensor([1, 2, 3], dtype=torch.int64)
 
     # NOTE: torch.matmul will fail becasue t1 and t3 are different types...
     res: float32Tensor = torch.matmul(t1, t3)

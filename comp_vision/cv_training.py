@@ -21,7 +21,12 @@ from torchvision.transforms.v2 import functional as F
 from torchvision.utils import draw_bounding_boxes
 from torchmetrics.detection import MeanAveragePrecision
 
-from comp_vision.cv_typing import TargetDict, TargetDictPureTensor, ImageTransform, BoxedImageTransform
+from comp_vision.cv_typing import (
+    TargetDict,
+    TargetDictPureTensor,
+    ImageTransform,
+    BoxedImageTransform,
+)
 
 
 class BoundingBoxDataset(torch.utils.data.Dataset):
@@ -48,8 +53,12 @@ class BoundingBoxDataset(torch.utils.data.Dataset):
     classes: List[str]  # List of all classes, excluding background
     num_classes: int  # Number of classes, including background, which is necessary for the model
 
-    def __init__(self, root: Path | str, transforms: Optional[BoxedImageTransform],
-                 img_extension: str = ".jpg"):
+    def __init__(
+        self,
+        root: Path | str,
+        transforms: Optional[BoxedImageTransform],
+        img_extension: str = ".jpg",
+    ):
         if isinstance(root, str):
             root = Path(root)
         self.root = root
@@ -164,7 +173,7 @@ class RecordOriginalImageSize(torch.nn.Module):
         height, width = F.get_size(image)
         target["original_size"] = torch.tensor([height, width], dtype=torch.int32)
         return image, target
-    
+
 
 # TODO: Add brief description of each transform.
 # TODO: Research better set of image transforms for training.
@@ -197,12 +206,14 @@ def generate_class_balanced_weights(dataset: BoundingBoxDataset):
     class_count = {i: 0 for i in range(dataset.num_classes)}
     for _, target in dataset:
         for label in target["labels"]:
-            class_count[label.item()] += 1  #type: ignore - labels is an integer tensor
+            class_count[label.item()] += 1  # type: ignore - labels is an integer tensor
     total = sum(class_count.values())
 
     # Inverse weights so that misclassifying more common objects are less penalized.
     # This effect is offset by frequent appearences.
-    weights = [total/(v*dataset.num_classes) if v != 0 else 0 for v in list(class_count.values())]
+    weights = [
+        total / (v * dataset.num_classes) if v != 0 else 0 for v in list(class_count.values())
+    ]
     weights[0] = 0.1  # Manually set the background weight.
     weights_tensor = torch.tensor(weights, dtype=torch.float32)
 
@@ -218,7 +229,7 @@ def get_resnet50_model(dataset):
         # Adjusting min/max sizes can help improve performance depending on feature size relative
         # to image size. Also note, aspect ratio is preserved during resizing.
         min_size=600,
-        max_size=1000
+        max_size=1000,
     )
 
     # Get number of input features for the classifier
@@ -270,29 +281,33 @@ def train_one_epoch(model, optimizer, data_loader, device):
 
     for batch, (images, targets) in enumerate(data_loader):
         images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
+        targets = [
+            {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()}
+            for t in targets
+        ]
 
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
 
         optimizer.zero_grad()
-        losses.backward()  # type: ignore - torch vision abstracts stuff weirdly here. 
+        losses.backward()  # type: ignore - torch vision abstracts stuff weirdly here.
         optimizer.step()
 
         print(f"Batch #{batch} Loss: {losses}")
 
 
-def train_model(dataset: BoundingBoxDataset, epochs: int = 5,
-                state_dict_file: Optional[str | Path] = None,
-                model_file_out: str = "model.pth", device="cpu"):
+def train_model(
+    dataset: BoundingBoxDataset,
+    epochs: int = 5,
+    state_dict_file: Optional[str | Path] = None,
+    model_file_out: str = "model.pth",
+    device="cpu",
+):
     print(f"Evaluating on {device}")
 
     # Create dataloader from dataset
     data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=4,
-        shuffle=True,
-        collate_fn=collate_fn
+        dataset, batch_size=4, shuffle=True, collate_fn=collate_fn
     )
 
     # Create model and set device
@@ -305,20 +320,11 @@ def train_model(dataset: BoundingBoxDataset, epochs: int = 5,
     # Construct an optimizer
     # Only get parameters from non-frozen layers (i.e. requires grad)
     params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.SGD(
-        params,
-        lr=0.005,
-        momentum=0.9,
-        weight_decay=0.0005
-    )
+    optimizer = torch.optim.SGD(params, lr=0.005, momentum=0.9, weight_decay=0.0005)
 
     # Construct a learning rate scheduler
     # NOTE: Not strictly necessary, but useful for efficient training
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer,
-        step_size=3,
-        gamma=0.1
-    )
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
     for epoch in range(epochs):
         print(f"----- Epoch #{epoch} -----")
@@ -330,12 +336,9 @@ def train_model(dataset: BoundingBoxDataset, epochs: int = 5,
     torch.save(model.state_dict(), model_file_out)
 
 
-def validate_model(dataset: BoundingBoxDataset, state_dict_file: str|Path, device="cpu"):
+def validate_model(dataset: BoundingBoxDataset, state_dict_file: str | Path, device="cpu"):
     data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=4,
-        shuffle=True,
-        collate_fn=collate_fn
+        dataset, batch_size=4, shuffle=True, collate_fn=collate_fn
     )
 
     model = get_resnet50_model(dataset)
@@ -346,12 +349,15 @@ def validate_model(dataset: BoundingBoxDataset, state_dict_file: str|Path, devic
     metric = MeanAveragePrecision(class_metrics=True)
     for batch, (images, targets) in enumerate(data_loader):
         images = list(image.to(device) for image in images)
-        target = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
+        target = [
+            {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()}
+            for t in targets
+        ]
 
         preds = model(images)
 
         metric.update(preds, target)
-    
+
     results = metric.compute()
 
     print("Overall mAP:", results["map"])
@@ -359,11 +365,12 @@ def validate_model(dataset: BoundingBoxDataset, state_dict_file: str|Path, devic
     print("mAP per Class:", results["map_per_class"])
 
 
-def apply_nms(boxes, scores, labels, *, iou_thresh=0.5, score_thresh=0.05, max_detections=100,
-              batched=True):
+def apply_nms(
+    boxes, scores, labels, *, iou_thresh=0.5, score_thresh=0.05, max_detections=100, batched=True
+):
     """Applies Non-Maximal Supression (NMS) to the detected bounding boxes for a given image.
-    Two options for multi-class detection are (1) Standard NMS, which eliminates overlapping 
-    bounding boxes regardless of label, and (2) Batched NMS which only eliminates overlapping 
+    Two options for multi-class detection are (1) Standard NMS, which eliminates overlapping
+    bounding boxes regardless of label, and (2) Batched NMS which only eliminates overlapping
     bounding boxes when they are of the same class. The maximal allowed overlapping area and score
     threshold can be set as parameters. By default, a batched filter is applied.
 
@@ -384,7 +391,7 @@ def apply_nms(boxes, scores, labels, *, iou_thresh=0.5, score_thresh=0.05, max_d
         max_detections (int, optional): Maximum number of predicted bounding boxes. If, after NMS
             filtering, the number of predicted boxes exceed max_detections, boxes with the lowest
             are removed. Defaults to 100.
-        batched (bool, optional): Indicated if a batched (class aware) or non-batched (class 
+        batched (bool, optional): Indicated if a batched (class aware) or non-batched (class
             agnostic) nms filter is used.
 
     Returns:
@@ -395,9 +402,11 @@ def apply_nms(boxes, scores, labels, *, iou_thresh=0.5, score_thresh=0.05, max_d
     boxes, scores, labels = boxes[keep_mask], scores[keep_mask], labels[keep_mask]
     if boxes.numel() == 0:
         return boxes, scores, labels
-    keep = (torchvision.ops.batched_nms(boxes, scores, labels, iou_thresh) 
+    keep = (
+        torchvision.ops.batched_nms(boxes, scores, labels, iou_thresh)
         if batched
-        else torchvision.ops.nms(boxes, scores, iou_thresh))
+        else torchvision.ops.nms(boxes, scores, iou_thresh)
+    )
     keep = keep[:max_detections]
     return boxes[keep], scores[keep], labels[keep]
 
@@ -413,8 +422,12 @@ def recover_original_image_dimensions(
     orig_height, orig_width = original_size
     resized_height, resized_width = current_size
     scale = torch.tensor(
-        [orig_width / resized_width, orig_height / resized_height,
-         orig_width / resized_width, orig_height / resized_height],
+        [
+            orig_width / resized_width,
+            orig_height / resized_height,
+            orig_width / resized_width,
+            orig_height / resized_height,
+        ],
         dtype=boxes.dtype,
         device=boxes.device,
     )

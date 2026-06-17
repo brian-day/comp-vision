@@ -17,7 +17,7 @@ type PositionClass = Literal[
     "Lid Stack",
     "MALDI",
     "2mL Tube",
-    "50 mL Tube"
+    "50 mL Tube",
 ]
 type Position = Tuple[PositionClass, int, Tuple[float, float]]
 
@@ -29,8 +29,8 @@ def plot_annotated_hamilton_deck(img, positions):
     width, height = img.size
 
     positions_df = pd.read_csv(positions)
-    xs = np.array(positions_df["center_x"])*width
-    ys = np.array(positions_df["center_y"])*height
+    xs = np.array(positions_df["center_x"]) * width
+    ys = np.array(positions_df["center_y"]) * height
 
     plt.figure(figsize=(8, 8))
     plt.scatter(xs, ys, c="red", s=50, edgecolor="white", linewidth=1)
