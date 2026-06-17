@@ -1,6 +1,26 @@
+import os
 import matplotlib.pyplot as plt
+from pathlib import Path
+from typing import Any, Callable, Dict, List, NotRequired, Tuple, Optional, Union, TypedDict
+from PIL import Image
+from torchvision import tv_tensors
+from torchvision.transforms import v2 as T
+from torchvision.utils import draw_bounding_boxes
 
-from candy_object_detection import BoundingBoxDataset, generate_transform
+from cv_training import BoundingBoxDataset, generate_transform
+
+
+def rename_images_and_labels(root):
+    if isinstance(root, str):
+        root = Path(root)
+    img_files = sorted((root / "images").glob("*.jpg"))
+    box_files = sorted((root / "labels").glob("*.txt"))
+
+    for i, (img, label) in enumerate(zip(img_files, box_files)):
+        new_img_name = root / "images" / f"{i}.jpg"
+        new_label_name = root / "labels" / f"{i}.txt"
+        os.rename(img, str(new_img_name))
+        os.rename(label, str(new_label_name))
 
 
 def get_bounding_box_dataset_stats(dataset: BoundingBoxDataset):
@@ -37,7 +57,6 @@ def get_bounding_box_dataset_stats(dataset: BoundingBoxDataset):
 
     plt.tight_layout()
     plt.show()
-
 
 
 def main():
