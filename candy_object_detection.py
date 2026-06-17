@@ -20,14 +20,14 @@ def main():
 
     # Display some training images
     for i in range(0, 5):
-        plot_training_data(i)
+        plot_training_data(dataset, i)
 
     # Build and train a model from scratch
-    train_model()
+    train_model(dataset)
 
     # Classify some images with the model
     for i in range(0,5):
-        single_image_classify(i)
+        single_image_classify(dataset, i)
 
 
 if __name__ == "__main__":

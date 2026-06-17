@@ -49,7 +49,8 @@ class BoundingBoxDataset(torch.utils.data.Dataset):
     classes: List[str]  # List of all classes, excluding background
     num_classes: int  # Number of classes, including background, which is necessary for the model
 
-    def __init__(self, root: Path | str, transforms: Optional[BoxedImageTransform], img_extension: str = IMG_FILE_EXT):
+    def __init__(self, root: Path | str, transforms: Optional[BoxedImageTransform],
+                 img_extension: str = ".jpg"):
         if isinstance(root, str):
             root = Path(root)
         self.root = root
@@ -235,9 +236,8 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
-def _test_forward_method():
-    model = get_resnet50_model(12)
-    dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True))
+def _test_forward_method(dataset: BoundingBoxDataset):
+    model = get_resnet50_model(dataset.num_classes)
     data_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=2,
@@ -283,13 +283,12 @@ def train_one_epoch(model, optimizer, data_loader, device):
         print(f"Batch #{batch} Loss: {losses}")
 
 
-def train_model(epochs: int = 5, state_dict_file: Optional[Path] = None):
-    device = "cpu"
+def train_model(dataset: BoundingBoxDataset, epochs: int = 5,
+                state_dict_file: Optional[str | Path] = None,
+                model_file_out: str = "model.pth", device="cpu"):
     print(f"Evaluating on {device}")
 
-    # Create dataset and dataloader
-    # TODO: Add training / test / validation split
-    dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(train=True))
+    # Create dataloader from dataset
     data_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=4,
@@ -298,7 +297,6 @@ def train_model(epochs: int = 5, state_dict_file: Optional[Path] = None):
     )
 
     # Create model and set device
-    # weights = ResNet50_Weights.IMAGENET1K_V2
     model = get_resnet50_model(dataset)
     if state_dict_file:
         state_dict = torch.load(state_dict_file, weights_only=True)
@@ -330,11 +328,10 @@ def train_model(epochs: int = 5, state_dict_file: Optional[Path] = None):
         lr_scheduler.step()
 
     # TODO: Add datetime to model if no name provided to provent accidnetal model overwrite.
-    torch.save(model.state_dict(), MODEL_FILE)
+    torch.save(model.state_dict(), model_file_out)
 
 
-def validate_model(device="cpu"):
-    dataset = BoundingBoxDataset(DATASET_PATH, generate_transform())
+def validate_model(dataset: BoundingBoxDataset, state_dict_file: str|Path, device="cpu"):
     data_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=4,
@@ -343,7 +340,7 @@ def validate_model(device="cpu"):
     )
 
     model = get_resnet50_model(dataset)
-    state_dict = torch.load(MODEL_FILE, weights_only=True)
+    state_dict = torch.load(state_dict_file, weights_only=True)
     model.load_state_dict(state_dict)
     model.eval()  # Redundant to with torch.no_grad()?
 

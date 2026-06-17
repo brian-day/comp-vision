@@ -7,17 +7,15 @@ from cv_training import BoundingBoxDataset, get_resnet50_model, apply_nms
 from cv_plotting import generate_label_colormap, generate_label_text_colormap
 
 
-# TODO: Factor out plotting portion of code...
-# TODO: When moving to pyecl, update this so that a single image can be downloaded and converted into a data laoder
-# rather than loading all the training images and grabbing by index
-def single_image_classify(idx, plot_transformed=False):
-    dataset = BoundingBoxDataset(DATASET_PATH)
+# TODO: Factor out plotting code, and eliminate duplicate code from within cv_plotting
+def single_image_classify(dataset, idx: int = 0, plot_transformed=False):
+    # NOTE: Index parameter is left for convenience if wanting to look at specific images in a large
+    # dataset, but the intended use of this function is single image datasetsm hence the default.
 
-    # weights = ResNet50_Weights.IMAGENET1K_V2
     model = get_resnet50_model(dataset)
     state_dict = torch.load("models/finetuned_wellplate_model.pth", weights_only=True)
     model.load_state_dict(state_dict)
-    model.eval()  # Redundant to with torch.no_grad()?
+    model.eval()
 
     img, target_true = dataset[idx]
     img_tensor = T.ToPureTensor()(img)
