@@ -61,7 +61,7 @@ def single_image_classify(dataset, state_dict_file: str | Path, idx: int = 0, pl
         colors=[label_cmap[label] for label in class_names_pred], width=3, font="Arial", font_size=20,
         fill_labels=True, label_colors=[label_text_cmap[label] for label in class_names_pred])
 
-    plt.figure(figsize=(12, 12))
+    plt.figure(figsize=(8, 8))
     plt.imshow(output_image.permute(1, 2, 0))
     plt.show()
 

@@ -86,10 +86,12 @@ def plot_training_data(dataset: BoundingBoxDataset, idx: int, image_out: Optiona
     class_names_true = [dataset.classes[i-1] for i in target_dict["labels"]]
     output_image = draw_bounding_boxes(
         image, target_dict["boxes"], labels=class_names_true,
-        colors=[label_cmap[label] for label in class_names_true], width=3, font="Arial", font_size=20,
+        colors=[label_cmap[label] for label in class_names_true],
+        label_colors=[label_text_cmap[label] for label in class_names_true],
+        width=3, font="Arial", font_size=20,
         fill_labels=True)
 
-    plt.figure(figsize=(12, 12))
+    plt.figure(figsize=(8, 8))
     plt.imshow(output_image.permute(1, 2, 0))
     if interactive:
         plt.show()

@@ -174,7 +174,7 @@ def generate_transform(train: bool = False) -> BoxedImageTransform:
     # NOTE: Model has resizing baked in. Do not add separate transform.
     # transforms.append(T.Resize(size=(640, 640)))
     if train:
-        transforms.append(T.RandomHorizontalFlip(1.0))
+        transforms.append(T.RandomHorizontalFlip(0.5))
         transforms.append(T.RandomVerticalFlip(0.1))
         transforms.append(T.ColorJitter(brightness=0.2, contrast=0.2))
     # Ensures no invalid bounding boxes (post-augmenation) are passed into the model
