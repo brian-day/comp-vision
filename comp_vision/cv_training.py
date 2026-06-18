@@ -5,19 +5,17 @@ segmentation masks or superfluous modules. Data is in YOLO format.
 
 from pathlib import Path
 from typing import List, Tuple, Optional
-import matplotlib.pyplot as plt
 
 import torch
 import torchvision
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+from torchvision.models.detection.faster_rcnn import FasterRCNN, FastRCNNPredictor
 from torchvision.io import read_image
 from torchvision import tv_tensors
 from torchvision.transforms import v2 as T
 from torchvision.transforms.v2 import functional as F
-from torchvision.utils import draw_bounding_boxes
 from torchmetrics.detection import MeanAveragePrecision
 
-from comp_vision.cv_typing import (
+from .cv_typing import (
     TargetDict,
     TargetDictPureTensor,
     BoxedImageTransform,
@@ -36,7 +34,7 @@ class BoundingBoxDataset(torch.utils.data.Dataset):
                     Note that background is always label 0.
 
     Root data directory is expected to contain the following:
-        `images` directory, containing only png images
+        `images` directory, containing images of the same file extension (.jpg or .png)
         `labels` directory, containing text files of normalized bounding boxed
         `classes.txt` file listing, in order, all possible classes.
     """
@@ -71,22 +69,10 @@ class BoundingBoxDataset(torch.utils.data.Dataset):
         box_path = self.box_files[idx]
         img = read_image(str(img_path))  # later versions of torchvision accept Paths directly
         img = tv_tensors.Image(img)
+        img = remove_alpha_channel(img)
 
-        # Remove alpha channel if present. TODO: Handle this more elegantly...
-        if img.shape[0] == 4:
-            img = tv_tensors.Image(img[:3, :, :])
         labels, boxes = read_box_file(box_path)
-
-        # NOTE: We expect unnormalized bounding boxes, so apply that transform here.
-        # Applying tensor math to a BoundingBoxes object will convert it back to a standard tensor.
-        # TODO: Move this logic to a helper function and hide behind flag so that it's easy to
-        # control whether boxes need normalization.
-        h, w = F.get_size(img)
-        boxes = boxes * torch.tensor([w, h, w, h])
-        boxes = tv_tensors.BoundingBoxes(boxes, format="CXCYWH", canvas_size=F.get_size(img))  # type: ignore
-        converter = T.ConvertBoundingBoxFormat("XYXY")
-        boxes = converter(boxes)
-        # boxes = tv_tensors.BoundingBoxes(boxes, format="XYXY", canvas_size=F.get_size(img))  # type: ignore
+        boxes = reformat_bounding_boxes(img, boxes)
 
         target_dict: TargetDict = {"image_id": idx, "labels": labels, "boxes": boxes}
 
@@ -97,39 +83,21 @@ class BoundingBoxDataset(torch.utils.data.Dataset):
     def __len__(self) -> int:
         return len(self.img_files)
 
-    def get_non_transformed_item(self, idx):
+    def get_non_transformed_item(self, idx: int) -> Tuple[tv_tensors.Image, TargetDict]:
         img_path = self.img_files[idx]
         box_path = self.box_files[idx]
         img = read_image(str(img_path))  # later versions of torchvision accept Paths directly
         img = tv_tensors.Image(img)
-
-        # Remove alpha channel if present. TODO: Handle this more elegantly...
-        if img.shape[0] == 4:
-            img = tv_tensors.Image(img[:3, :, :])
-        labels, boxes = read_box_file(box_path)
+        img = remove_alpha_channel(img)
 
         labels, boxes = read_box_file(box_path)
-
-        # NOTE: We expect unnormalized bounding boxes, so apply that transform here.
-        # Applying tensor math to a BoundingBoxes object will convert it back to a standard tensor.
-        # TODO: Move this logic to a helper function and hide behind flag so that it's easy to
-        # control whether boxes need normalization.
-        h, w = F.get_size(img)
-        boxes = boxes * torch.tensor([w, h, w, h])
-        boxes = tv_tensors.BoundingBoxes(boxes, format="CXCYWH", canvas_size=F.get_size(img))  # type: ignore
-        converter = T.ConvertBoundingBoxFormat("XYXY")
-        boxes = converter(boxes)
+        boxes = reformat_bounding_boxes(img, boxes)
 
         target_dict: TargetDict = {"image_id": idx, "labels": labels, "boxes": boxes}
 
         return img, target_dict
 
 
-# Tried annotating with exact tensor type (torch.IntTensor and torch.FloatTensor) but pylance does
-# not recognize the datatypes of the actual tensors, and assumes type mismatch.
-# NOTE: We mostly work with bounding boxes in tv_tensors.BoundingBoxes format, but depending on use
-# case, we may unnormalize the box data, which is image dependent. This function returns a plain tensor,
-# and any additional transforms are up to the developer.
 def read_box_file(
     file: Path, delimiter: str = " ", increment_labels: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -145,10 +113,6 @@ def read_box_file(
     labels = torch.as_tensor(labels, dtype=torch.int64)
     labels = labels + 1 if increment_labels else labels
     boxes = torch.as_tensor(boxes, dtype=torch.float32)
-
-    # Swap the 2nd and 3rd columns of each individual box tensor to convert from
-    # XXYY format to XYXY format.
-    # boxes[:, [1, 2]] = boxes[:, [2, 1]]
 
     return labels, boxes
 
@@ -185,37 +149,34 @@ def generate_transform(train: bool = False) -> BoxedImageTransform:
     transforms.append(T.SanitizeBoundingBoxes())
 
     # Convert images / boxes to pure tensors for model compatibility.
-    # Careful with when special tpyes are needed vs. pure tensors.
+    # Careful with when special types are needed vs. pure tensors.
     transforms.append(T.ToDtype(torch.float, scale=True))
     transforms.append(T.ToPureTensor())
 
     return T.Compose(transforms)
 
 
-def generate_class_balanced_weights(dataset: BoundingBoxDataset):
-    # To account for class imbalance in the training data, we can modify the loss function of the
-    # model to more harshly penalize rare classes. This prevents the model from over prediciting the
-    # common class, which is would otherwise learn to do during training.
-    # Note: Classes assumed to have index 0 = background, so must include a small non-zero weight
-    # for the background at the beginning of the weight tensor.
-    class_count = {i: 0 for i in range(dataset.num_classes)}
-    for _, target in dataset:
-        for label in target["labels"]:
-            class_count[label.item()] += 1  # type: ignore - labels is an integer tensor
-    total = sum(class_count.values())
-
-    # Inverse weights so that misclassifying more common objects are less penalized.
-    # This effect is offset by frequent appearences.
-    weights = [
-        total / (v * dataset.num_classes) if v != 0 else 0 for v in list(class_count.values())
-    ]
-    weights[0] = 0.1  # Manually set the background weight.
-    weights_tensor = torch.tensor(weights, dtype=torch.float32)
-
-    return weights_tensor
+def remove_alpha_channel(img: tv_tensors.Image) -> tv_tensors.Image:
+    # Remove alpha channel if present.
+    if img.shape[0] == 4:
+        img = tv_tensors.Image(img[:3, :, :])
+    
+    return img
 
 
-def get_resnet50_model(dataset):
+def reformat_bounding_boxes(img, boxes) -> tv_tensors.BoundingBoxes:
+    # NOTE: We expect unnormalized bounding boxes, so apply that transform here.
+    # Applying tensor math to a BoundingBoxes object will convert it back to a standard tensor.
+    h, w = F.get_size(img)
+    boxes_tens = boxes * torch.tensor([w, h, w, h])
+    boxes = tv_tensors.BoundingBoxes(boxes_tens, format="CXCYWH", canvas_size=F.get_size(img))  # type: ignore
+    converter = T.ConvertBoundingBoxFormat("XYXY")
+    boxes = converter(boxes)
+
+    return boxes
+
+
+def get_resnet50_model(dataset: BoundingBoxDataset) -> FasterRCNN:
     # Load the backbone with state-of-the-art weights
     weights = torchvision.models.detection.FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT
     model = torchvision.models.detection.fasterrcnn_resnet50_fpn_v2(
@@ -239,36 +200,6 @@ def get_resnet50_model(dataset):
 def collate_fn(batch):
     # Used to avoid shape issues.
     return tuple(zip(*batch))
-
-
-def _test_forward_method(dataset: BoundingBoxDataset):
-    model = get_resnet50_model(dataset.num_classes)
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=2,
-        shuffle=True,
-        collate_fn=collate_fn,  # Figure out what this does...
-    )
-
-    # For Training
-    images, targets = next(iter(data_loader))
-    images = list(image for image in images)
-    print("-----")
-    print(images)
-    targets = [{k: v for k, v in t.items()} for t in targets]
-    output = model(images, targets)  # Returns losses and detections
-    print(output)
-
-    # For inference
-    model.eval()
-    # x = [torch.rand(3, 300, 400), torch.rand(3, 500, 400)]
-    predictions = model(images)  # Returns predictions
-    print(predictions[0])
-
-    output_image = draw_bounding_boxes(images[0], predictions[0]["boxes"], colors="red", width=5)
-    plt.figure(figsize=(12, 12))
-    plt.imshow(output_image.permute(1, 2, 0))
-    plt.show()
 
 
 def train_one_epoch(model, optimizer, data_loader, device):
@@ -359,72 +290,3 @@ def validate_model(dataset: BoundingBoxDataset, state_dict_file: str | Path, dev
     print("mAP at 0.50 IoU:", results["map_50"])
     print("mAP per Class:", results["map_per_class"])
 
-
-def apply_nms(
-    boxes, scores, labels, *, iou_thresh=0.5, score_thresh=0.05, max_detections=100, batched=True
-):
-    """Applies Non-Maximal Supression (NMS) to the detected bounding boxes for a given image.
-    Two options for multi-class detection are (1) Standard NMS, which eliminates overlapping
-    bounding boxes regardless of label, and (2) Batched NMS which only eliminates overlapping
-    bounding boxes when they are of the same class. The maximal allowed overlapping area and score
-    threshold can be set as parameters. By default, a batched filter is applied.
-
-    Note that, in the present implementation, we do not allow for rotated bounding boxes, so params
-    should be set with this limitation in mind. For well plate detection, it is safe to assume
-    very little overlap in the detected boudning boxes.
-
-    Args:
-        boxes (_type_): _description_
-        scores (_type_): _description_
-        labels (_type_): _description_
-        iou_thresh (float, optional): Maximum allowed intersection-over-union value. Anything boxes
-            exceeding this value will be eliminated, retaining only the one with the highest score.
-            This value is bounded between 0 and 1. Defaults to 0.5.
-        score_thresh (float, optional): Minimum expected certainty of the predicted score for a
-            given bounding box / label. Any predicted boxes with a score below this value are
-            removed. Defaults to 0.05.
-        max_detections (int, optional): Maximum number of predicted bounding boxes. If, after NMS
-            filtering, the number of predicted boxes exceed max_detections, boxes with the lowest
-            are removed. Defaults to 100.
-        batched (bool, optional): Indicated if a batched (class aware) or non-batched (class
-            agnostic) nms filter is used.
-
-    Returns:
-        Tuple[Tensor, Tensor, Tensor]: _description_
-    """
-    # boxes: (N,4) XYXY float tensor, scores: (N,), labels: (N,) int
-    keep_mask = scores > score_thresh
-    boxes, scores, labels = boxes[keep_mask], scores[keep_mask], labels[keep_mask]
-    if boxes.numel() == 0:
-        return boxes, scores, labels
-    keep = (
-        torchvision.ops.batched_nms(boxes, scores, labels, iou_thresh)
-        if batched
-        else torchvision.ops.nms(boxes, scores, iou_thresh)
-    )
-    keep = keep[:max_detections]
-    return boxes[keep], scores[keep], labels[keep]
-
-
-# TODO: Fix type annotations.
-# TODO: Rename function for clarity
-def recover_original_image_dimensions(
-    boxes: torch.Tensor,
-    current_size: Tuple[int, int],
-    original_size: Tuple[int, int],
-) -> torch.Tensor:
-    """Scale resized bounding boxes back to the original image dimensions."""
-    orig_height, orig_width = original_size
-    resized_height, resized_width = current_size
-    scale = torch.tensor(
-        [
-            orig_width / resized_width,
-            orig_height / resized_height,
-            orig_width / resized_width,
-            orig_height / resized_height,
-        ],
-        dtype=boxes.dtype,
-        device=boxes.device,
-    )
-
-    return boxes * scale

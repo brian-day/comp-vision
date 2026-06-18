@@ -28,7 +28,7 @@ class TargetDict(TypedDict):
     boxes: tv_tensors.BoundingBoxes
     labels: int32Tensor
     # original_size will be added by transforms if included.
-    original_size: NotRequired[int32Tensor]  # int32
+    original_size: NotRequired[int32Tensor]
 
 
 class TargetDictPureTensor(TypedDict):

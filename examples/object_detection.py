@@ -1,6 +1,6 @@
 from comp_vision.cv_training import BoundingBoxDataset, generate_transform, train_model
 from comp_vision.cv_classification import single_image_classify
-from comp_vision.cv_plotting import plot_training_data
+from comp_vision.cv_plotting import plot_bounding_boxes_from_dataset
 
 
 """
@@ -37,16 +37,17 @@ def main():
     )
 
     # Display some training images
-    for i in range(0, 5):
-        plot_training_data(dataset, i, interactive=True)
+    # for i in range(0, 5):
+    #     plot_bounding_boxes_from_dataset(dataset, i, interactive=True)
 
     # Build and train a model from scratch
-    train_model(dataset, model_file_out=MODEL_FILE, epochs=5)
+    # train_model(dataset, model_file_out=MODEL_FILE, epochs=5)
 
     # Classify some images with the model
     dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(), img_extension=IMG_FILE_EXT)
     for i in range(0, 5):
-        single_image_classify(dataset, MODEL_FILE, i)
+        _, target_dict = single_image_classify(dataset, MODEL_FILE, i)
+        plot_bounding_boxes_from_dataset(dataset, i, target_dict=target_dict, interactive=True)
 
 
 if __name__ == "__main__":

@@ -3,10 +3,12 @@ import numpy as np
 from matplotlib import cm
 import matplotlib.pyplot as plt
 from typing import Dict, Optional, Tuple
+import torch
 from torchvision.transforms import v2 as T
 from torchvision.utils import draw_bounding_boxes
 
-from comp_vision.cv_training import BoundingBoxDataset
+from .cv_training import BoundingBoxDataset
+from .cv_typing import TargetDictPureTensor
 
 
 type LabelColorMap = Dict[str, Tuple[int, int, int]]
@@ -68,34 +70,77 @@ def generate_label_text_colormap(label_color_map: LabelColorMap) -> LabelTextCol
     return label_text_color
 
 
-def plot_training_data(
+def plot_bounding_boxes_from_dataset(
     dataset: BoundingBoxDataset,
     idx: int,
+    *,
+    target_dict: Optional[TargetDictPureTensor] = None,
     image_out: Optional[str | Path] = None,
     interactive: bool = False,
 ):
-    # NOTE: This includes applies transforms to both iamge and bounding boxes.
-    image, target_dict = dataset[idx]
-
-    # NOTE: draw_bounding_boxes explicitly expect that boxes use XYXY format.
-    converter = T.ConvertBoundingBoxFormat("XYXY")
-    new_boxes = converter(target_dict["boxes"])
-
-    # Given the code below, image and box can be pure tensors, which is what would be returned by
-    # the model. Be careful with when an image/box must be in specialized format vs pure tensor format.
+    # NOTE: This applies transforms to both image and bounding boxes.
+    image, target_true = dataset[idx]
     image = T.ToPureTensor()(image)
-    new_boxes = T.ToPureTensor()(new_boxes)
+    # Plot training data boxes if none provided
+    # NOTE: If target_dict is provided, be careful that none of the transforms applied to the image
+    # impact the boxes (e.g. random flip) since we fetch the image again here. If they should, use 
+    # the plot from image function and provide all additional data.
+    if not target_dict:
+        target_dict = target_true 
 
     label_cmap = generate_label_colormap(dataset)
     label_text_cmap = generate_label_text_colormap(label_cmap)
 
-    class_names_true = [dataset.classes[i - 1] for i in target_dict["labels"]]
+    plot_bounding_boxes_from_image(
+        image,
+        target_dict,
+        classes = dataset.classes,
+        label_cmap = label_cmap,
+        label_text_cmap = label_text_cmap,
+        interactive = interactive,
+        image_out = image_out
+    )
+
+
+def plot_bounding_boxes_from_image(
+    image: torch.Tensor,
+    target_dict,
+    *,
+    classes: list[str] = [],
+    label_cmap: str | LabelColorMap = "blue",
+    label_text_cmap: str | LabelTextColorMap = "white",
+    interactive: bool = False,
+    image_out: Optional[str | Path] = None,
+):
+    boxes = target_dict["boxes"]
+    scores = target_dict["scores"] if "scores" in target_dict else None
+    labels = target_dict["labels"]
+
+    # Convert label indicies to class names if provided
+    class_names = [classes[i - 1] for i in labels] if classes else labels
+    # Add scores to bbox labels if included (i.e. Non-training data boxes)
+    bbox_labels = [
+        f"{class_pred}: {score:.3f}" for (class_pred, score) in zip(class_names, scores)
+    ] if scores is not None else class_names
+
+    # Format colors and label colors accoring to provided color_map
+    colors = (
+        [label_cmap[label] for label in class_names]
+        if isinstance(label_cmap, dict)
+        else label_cmap
+    )
+    label_colors = (
+        [label_text_cmap[label] for label in class_names]
+        if isinstance(label_cmap, dict)
+        else label_cmap
+    )
+
     output_image = draw_bounding_boxes(
         image,
-        target_dict["boxes"],
-        labels=class_names_true,
-        colors=[label_cmap[label] for label in class_names_true],
-        label_colors=[label_text_cmap[label] for label in class_names_true],
+        boxes,
+        labels=bbox_labels,
+        colors=colors,  # type: ignore
+        label_colors=label_colors,  # type: ignore
         width=3,
         font="Arial",
         font_size=20,
