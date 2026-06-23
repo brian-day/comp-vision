@@ -18,17 +18,17 @@ to train models yourself, these exisiting models shoudl yield good performance f
 parts of the module.
 """
 
-DATASET_PATH = "datasets/candy_data/"
-IMG_FILE_EXT = ".jpg"
-MODEL_FILE = "models/finetuned_candy_model.pth"
+# DATASET_PATH = "datasets/candy_data/"
+# IMG_FILE_EXT = ".jpg"
+# MODEL_FILE = "models/finetuned_candy_model.pth"
 
 # DATASET_PATH = "datasets/coin_data/"
 # IMG_FILE_EXT = ".JPG"
 # MODEL_FILE = "models/finetuned_coin_model.pth"
 
-# DATASET_PATH = "datasets/wellplate_data/"
-# IMG_FILE_EXT = ".png"
-# MODEL_FILE = "models/finetuned_wellplate_model.pth"
+DATASET_PATH = "datasets/wellplate_data/"
+IMG_FILE_EXT = ".png"
+MODEL_FILE = "models/finetuned_wellplate_model.pth"
 
 
 def main():
@@ -46,8 +46,16 @@ def main():
     # Classify some images with the model
     dataset = BoundingBoxDataset(DATASET_PATH, generate_transform(), img_extension=IMG_FILE_EXT)
     for i in range(0, 5):
-        _, target_dict = single_image_classify(dataset, MODEL_FILE, i)
+        img, target_dict = single_image_classify(dataset, MODEL_FILE, i)
         plot_bounding_boxes_from_dataset(dataset, i, target_dict=target_dict, interactive=True)
+
+        boxes = target_dict["boxes"]
+        from comp_vision.hamilton_positions.position_assignments import (
+            boxes_to_centers, boxes_to_deck_positions, plot_box_centers
+        )
+        detected_position_types = boxes_to_deck_positions(img, boxes, "comp_vision/hamilton_positions/positions_basis_left.csv")
+        centers = boxes_to_centers(img, boxes)
+        plot_box_centers(img, centers, detected_position_types)
 
 
 if __name__ == "__main__":
